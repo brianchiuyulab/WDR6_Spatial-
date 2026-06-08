@@ -1,0 +1,120 @@
+############################################################
+## Checkpoint 1
+## Download and inspect GSE192742 human Visium files
+############################################################
+
+set.seed(20260608)
+options(stringsAsFactors = FALSE)
+options(timeout = max(3600, getOption("timeout")))
+
+## 1. Set working folders
+project_name <- "GSE192742_WDR6_spatial"
+base_dir <- file.path(getwd(), project_name)
+
+dir_raw <- file.path(base_dir, "raw")
+dir_ext <- file.path(base_dir, "extracted")
+dir_out <- file.path(base_dir, "checkpoint_outputs")
+
+dir.create(base_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_raw, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_ext, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_out, showWarnings = FALSE, recursive = TRUE)
+
+## 2. Define target human Visium samples
+sample_meta <- data.frame(
+  gsm = c("GSM5764424", "GSM5764425", "GSM5764426", "GSM5764427", "GSM5764428"),
+  donor = c("H35", "H35", "H36", "H37", "H38"),
+  condition = c("Steatotic", "Steatotic", "Healthy", "Steatotic", "Healthy"),
+  section = c("H35_section1", "H35_section2", "H36", "H37", "H38"),
+  stringsAsFactors = FALSE
+)
+
+write.csv(
+  sample_meta,
+  file = file.path(dir_out, "checkpoint1_sample_metadata.csv"),
+  row.names = FALSE
+)
+
+print(sample_meta)
+
+## 3. Download GSE192742 RAW archive
+geo_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE192nnn/GSE192742/suppl/GSE192742_RAW.tar"
+tar_file <- file.path(dir_raw, "GSE192742_RAW.tar")
+
+if (!file.exists(tar_file)) {
+  message("Downloading GSE192742_RAW.tar ...")
+  download.file(
+    url = geo_url,
+    destfile = tar_file,
+    mode = "wb",
+    method = "auto"
+  )
+} else {
+  message("GSE192742_RAW.tar already exists. Skip download.")
+}
+
+stopifnot(file.exists(tar_file))
+
+## 4. List archive contents
+tar_index <- utils::untar(tar_file, list = TRUE)
+
+writeLines(
+  tar_index,
+  con = file.path(dir_out, "checkpoint1_GSE192742_RAW_tar_index.txt")
+)
+
+## 5. Find target human Visium files
+target_pattern <- paste(sample_meta$gsm, collapse = "|")
+target_files <- tar_index[grepl(target_pattern, tar_index)]
+
+writeLines(
+  target_files,
+  con = file.path(dir_out, "checkpoint1_target_human_visium_files.txt")
+)
+
+cat("\nNumber of files matching target human Visium GSM IDs:\n")
+print(length(target_files))
+
+cat("\nTarget files:\n")
+print(target_files)
+
+## 6. Extract target files only
+if (length(target_files) == 0) {
+  stop("No target human Visium files found. Please check the GEO archive.")
+}
+
+message("Extracting target human Visium files ...")
+utils::untar(
+  tarfile = tar_file,
+  files = target_files,
+  exdir = dir_ext
+)
+
+## 7. List extracted files
+extracted_files <- list.files(
+  dir_ext,
+  recursive = TRUE,
+  full.names = FALSE
+)
+
+writeLines(
+  extracted_files,
+  con = file.path(dir_out, "checkpoint1_extracted_files.txt")
+)
+
+cat("\nExtracted files:\n")
+print(extracted_files)
+
+## 8. Show files grouped by sample
+cat("\nFiles grouped by GSM:\n")
+
+for (gsm in sample_meta$gsm) {
+  cat("\n==============================\n")
+  cat(gsm, "\n")
+  cat("==============================\n")
+  print(extracted_files[grepl(gsm, extracted_files)])
+}
+
+cat("\nCheckpoint 1 completed.\n")
+cat("Project folder:\n")
+cat(base_dir, "\n")
