@@ -1,0 +1,250 @@
+############################################################
+## Checkpoint 2
+## Load all five human Visium samples into Seurat and perform raw QC
+## No normalization, no integration, no Harmony, no biological analysis
+############################################################
+
+options(stringsAsFactors = FALSE)
+
+## -----------------------------
+## 1. Packages
+## -----------------------------
+
+if (!requireNamespace("Seurat", quietly = TRUE)) {
+  stop("Please install Seurat first.")
+}
+
+if (!requireNamespace("R.utils", quietly = TRUE)) {
+  stop("Please install R.utils first: install.packages('R.utils')")
+}
+
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  stop("Please install ggplot2 first.")
+}
+
+library(Seurat)
+library(R.utils)
+library(ggplot2)
+
+## -----------------------------
+## 2. Reuse project folders
+## -----------------------------
+
+project_name <- "GSE192742_WDR6_spatial"
+base_dir <- file.path(getwd(), project_name)
+
+dir_ext <- file.path(base_dir, "extracted")
+dir_std <- file.path(base_dir, "visium_standardized")
+dir_out <- file.path(base_dir, "checkpoint_outputs")
+dir_fig <- file.path(dir_out, "checkpoint2_raw_QC_figures")
+
+dir.create(dir_std, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_out, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_fig, showWarnings = FALSE, recursive = TRUE)
+
+## -----------------------------
+## 3. Human Visium sample metadata
+## -----------------------------
+
+sample_meta <- data.frame(
+  gsm = c("GSM5764424", "GSM5764425", "GSM5764426", "GSM5764427", "GSM5764428"),
+  jbo = c("JBO014", "JBO015", "JBO018", "JBO019", "JBO022"),
+  donor = c("H35", "H35", "H36", "H37", "H38"),
+  condition = c("Steatotic", "Steatotic", "Healthy", "Steatotic", "Healthy"),
+  section = c("H35_section1", "H35_section2", "H36", "H37", "H38"),
+  stringsAsFactors = FALSE
+)
+
+write.csv(
+  sample_meta,
+  file = file.path(dir_out, "checkpoint2_sample_metadata.csv"),
+  row.names = FALSE
+)
+
+print(sample_meta)
+
+## -----------------------------
+## 4. Function: convert GEO file names into standard 10x Visium folder
+## -----------------------------
+
+standardize_visium_sample <- function(gsm, jbo) {
+  
+  sample_dir <- file.path(dir_std, gsm)
+  spatial_dir <- file.path(sample_dir, "spatial")
+  
+  dir.create(sample_dir, showWarnings = FALSE, recursive = TRUE)
+  dir.create(spatial_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  h5_src <- file.path(dir_ext, paste0(gsm, "_filtered_feature_bc_matrix_", jbo, ".h5"))
+  scalefactor_src <- file.path(dir_ext, paste0(gsm, "_scalefactors_json_", jbo, ".json.gz"))
+  hires_src <- file.path(dir_ext, paste0(gsm, "_tissue_hires_image_", jbo, ".png.gz"))
+  lowres_src <- file.path(dir_ext, paste0(gsm, "_tissue_lowres_image_", jbo, ".png.gz"))
+  position_src <- file.path(dir_ext, paste0(gsm, "_tissue_positions_list_", jbo, ".csv.gz"))
+  
+  required_files <- c(h5_src, scalefactor_src, hires_src, lowres_src, position_src)
+  
+  if (!all(file.exists(required_files))) {
+    print(data.frame(file = required_files, exists = file.exists(required_files)))
+    stop("Missing required files for ", gsm)
+  }
+  
+  file.copy(
+    from = h5_src,
+    to = file.path(sample_dir, "filtered_feature_bc_matrix.h5"),
+    overwrite = TRUE
+  )
+  
+  R.utils::gunzip(
+    filename = scalefactor_src,
+    destname = file.path(spatial_dir, "scalefactors_json.json"),
+    overwrite = TRUE,
+    remove = FALSE
+  )
+  
+  R.utils::gunzip(
+    filename = hires_src,
+    destname = file.path(spatial_dir, "tissue_hires_image.png"),
+    overwrite = TRUE,
+    remove = FALSE
+  )
+  
+  R.utils::gunzip(
+    filename = lowres_src,
+    destname = file.path(spatial_dir, "tissue_lowres_image.png"),
+    overwrite = TRUE,
+    remove = FALSE
+  )
+  
+  R.utils::gunzip(
+    filename = position_src,
+    destname = file.path(spatial_dir, "tissue_positions_list.csv"),
+    overwrite = TRUE,
+    remove = FALSE
+  )
+  
+  return(sample_dir)
+}
+
+## -----------------------------
+## 5. Load all five Visium samples
+## -----------------------------
+
+obj_list <- list()
+
+for (i in seq_len(nrow(sample_meta))) {
+  
+  gsm <- sample_meta$gsm[i]
+  jbo <- sample_meta$jbo[i]
+  
+  cat("\n==============================\n")
+  cat("Loading sample:", gsm, "\n")
+  cat("==============================\n")
+  
+  sample_dir <- standardize_visium_sample(gsm, jbo)
+  
+  obj <- Load10X_Spatial(
+    data.dir = sample_dir,
+    filename = "filtered_feature_bc_matrix.h5",
+    assay = "Spatial",
+    slice = gsm
+  )
+  
+  obj$gsm <- sample_meta$gsm[i]
+  obj$jbo <- sample_meta$jbo[i]
+  obj$donor <- sample_meta$donor[i]
+  obj$condition <- sample_meta$condition[i]
+  obj$section <- sample_meta$section[i]
+  
+  obj[["percent.mt"]] <- PercentageFeatureSet(obj, pattern = "^MT-")
+  
+  obj_list[[gsm]] <- obj
+  
+  print(obj)
+}
+
+## -----------------------------
+## 6. Raw QC summary table
+## -----------------------------
+
+qc_summary <- do.call(
+  rbind,
+  lapply(names(obj_list), function(gsm) {
+    
+    obj <- obj_list[[gsm]]
+    
+    data.frame(
+      gsm = unique(obj$gsm),
+      jbo = unique(obj$jbo),
+      donor = unique(obj$donor),
+      condition = unique(obj$condition),
+      section = unique(obj$section),
+      n_spots = ncol(obj),
+      n_features_total = nrow(obj),
+      median_nCount_Spatial = median(obj$nCount_Spatial),
+      median_nFeature_Spatial = median(obj$nFeature_Spatial),
+      median_percent_mt = median(obj$percent.mt),
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
+write.csv(
+  qc_summary,
+  file = file.path(dir_out, "checkpoint2_raw_QC_summary.csv"),
+  row.names = FALSE
+)
+
+cat("\nRaw QC summary:\n")
+print(qc_summary)
+
+## -----------------------------
+## 7. Raw spatial QC plots
+## -----------------------------
+
+for (gsm in names(obj_list)) {
+  
+  obj <- obj_list[[gsm]]
+  
+  p1 <- SpatialFeaturePlot(
+    obj,
+    features = "nCount_Spatial"
+  ) + ggtitle(paste0(gsm, " nCount_Spatial"))
+  
+  p2 <- SpatialFeaturePlot(
+    obj,
+    features = "nFeature_Spatial"
+  ) + ggtitle(paste0(gsm, " nFeature_Spatial"))
+  
+  p3 <- SpatialFeaturePlot(
+    obj,
+    features = "percent.mt"
+  ) + ggtitle(paste0(gsm, " percent.mt"))
+  
+  pdf(
+    file = file.path(dir_fig, paste0(gsm, "_raw_spatial_QC.pdf")),
+    width = 12,
+    height = 4
+  )
+  print(p1 + p2 + p3)
+  dev.off()
+}
+
+## -----------------------------
+## 8. Save raw Seurat objects
+## -----------------------------
+
+saveRDS(
+  obj_list,
+  file = file.path(dir_out, "checkpoint2_raw_Seurat_object_list.rds")
+)
+
+writeLines(
+  capture.output(sessionInfo()),
+  con = file.path(dir_out, "checkpoint2_sessionInfo.txt")
+)
+
+cat("\nCheckpoint 2 completed.\n")
+cat("Saved object list:\n")
+cat(file.path(dir_out, "checkpoint2_raw_Seurat_object_list.rds"), "\n")
+cat("Saved QC table:\n")
+cat(file.path(dir_out, "checkpoint2_raw_QC_summary.csv"), "\n")
