@@ -1,0 +1,330 @@
+############################################################
+## Checkpoint 5
+## Zonation marker review and zonation score generation
+## Dataset: GSE192742 human liver Visium
+##
+## Input:
+##   checkpoint4_logNormalized_Seurat_object_list.rds
+##
+## Purpose:
+##   1. Visualize author-supported liver zonation markers.
+##   2. Generate simple central and portal zonation scores.
+##   3. Generate a zonation index per spot:
+##        ZonationIndex = CentralScore - PortalScore
+##
+## Marker definition:
+##   Central / pericentral / zone 3 markers:
+##      GLUL, CYP2E1
+##
+##   Portal / periportal / zone 1 markers:
+##      HAL, SDS
+##
+## Notes:
+##   - Each Visium section is analyzed independently.
+##   - No Seurat object integration is performed.
+##   - No Harmony correction is performed.
+##   - No WDR6 module analysis is performed in this checkpoint.
+############################################################
+
+set.seed(20260608)
+options(stringsAsFactors = FALSE)
+
+############################################################
+## 1. Set directories
+############################################################
+
+project_name <- "GSE192742_WDR6_spatial"
+base_dir <- file.path(getwd(), project_name)
+
+dir_out <- file.path(base_dir, "checkpoint_outputs")
+dir_fig <- file.path(dir_out, "checkpoint5_zonation_figures")
+dir_tab <- file.path(dir_out, "checkpoint5_zonation_tables")
+
+dir.create(dir_fig, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_tab, showWarnings = FALSE, recursive = TRUE)
+
+############################################################
+## 2. Load packages
+############################################################
+
+required_pkgs <- c("Seurat", "ggplot2", "patchwork")
+
+missing_pkgs <- required_pkgs[
+  !vapply(required_pkgs, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_pkgs) > 0) {
+  stop(
+    "Missing packages: ",
+    paste(missing_pkgs, collapse = ", "),
+    "\nPlease install them before running this script."
+  )
+}
+
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+
+############################################################
+## 3. Load normalized Seurat object list
+############################################################
+
+obj_list <- readRDS(
+  file.path(dir_out, "checkpoint4_logNormalized_Seurat_object_list.rds")
+)
+
+cat("\nLoaded objects:\n")
+print(names(obj_list))
+
+############################################################
+## 4. Define zonation markers
+############################################################
+
+central_markers <- c("GLUL", "CYP2E1")
+portal_markers <- c("HAL", "SDS")
+
+zonation_markers <- unique(c(central_markers, portal_markers))
+
+############################################################
+## 5. Helper functions
+############################################################
+
+get_present_genes <- function(obj, genes) {
+  genes[genes %in% rownames(obj)]
+}
+
+add_mean_score <- function(obj, genes, score_name) {
+  
+  present_genes <- get_present_genes(obj, genes)
+  
+  if (length(present_genes) == 0) {
+    warning("No genes detected for ", score_name, ". Score set to NA.")
+    obj[[score_name]] <- NA_real_
+    return(obj)
+  }
+  
+  data_mat <- GetAssayData(
+    object = obj,
+    assay = "Spatial",
+    slot = "data"
+  )
+  
+  score <- Matrix::colMeans(data_mat[present_genes, , drop = FALSE])
+  obj[[score_name]] <- score
+  
+  return(obj)
+}
+
+############################################################
+## 6. Gene presence check for zonation markers
+############################################################
+
+gene_presence_list <- lapply(names(obj_list), function(gsm) {
+  
+  obj <- obj_list[[gsm]]
+  DefaultAssay(obj) <- "Spatial"
+  
+  data.frame(
+    gsm = unique(obj$gsm),
+    donor = unique(obj$donor),
+    condition = unique(obj$condition),
+    section = unique(obj$section),
+    gene = zonation_markers,
+    detected_in_matrix = zonation_markers %in% rownames(obj),
+    stringsAsFactors = FALSE
+  )
+})
+
+gene_presence_df <- do.call(rbind, gene_presence_list)
+
+cat("\nZonation marker presence:\n")
+print(gene_presence_df)
+
+write.csv(
+  gene_presence_df,
+  file = file.path(dir_tab, "checkpoint5_zonation_marker_presence.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 7. Add central score, portal score, and zonation index
+############################################################
+
+obj_list_zonation <- lapply(names(obj_list), function(gsm) {
+  
+  obj <- obj_list[[gsm]]
+  DefaultAssay(obj) <- "Spatial"
+  
+  cat("\nProcessing zonation scores for:", gsm, "\n")
+  
+  obj <- add_mean_score(
+    obj = obj,
+    genes = central_markers,
+    score_name = "CentralScore"
+  )
+  
+  obj <- add_mean_score(
+    obj = obj,
+    genes = portal_markers,
+    score_name = "PortalScore"
+  )
+  
+  obj$ZonationIndex <- obj$CentralScore - obj$PortalScore
+  
+  return(obj)
+})
+
+names(obj_list_zonation) <- names(obj_list)
+
+############################################################
+## 8. Export spot-level zonation score table
+############################################################
+
+spot_zonation_tables <- lapply(names(obj_list_zonation), function(gsm) {
+  
+  obj <- obj_list_zonation[[gsm]]
+  
+  meta <- obj@meta.data
+  
+  data.frame(
+    barcode = rownames(meta),
+    gsm = obj$gsm,
+    donor = obj$donor,
+    condition = obj$condition,
+    section = obj$section,
+    nCount_Spatial = obj$nCount_Spatial,
+    nFeature_Spatial = obj$nFeature_Spatial,
+    percent.mt = obj$percent.mt,
+    CentralScore = obj$CentralScore,
+    PortalScore = obj$PortalScore,
+    ZonationIndex = obj$ZonationIndex,
+    stringsAsFactors = FALSE
+  )
+})
+
+spot_zonation_df <- do.call(rbind, spot_zonation_tables)
+
+write.csv(
+  spot_zonation_df,
+  file = file.path(dir_tab, "checkpoint5_spot_level_zonation_scores.csv"),
+  row.names = FALSE
+)
+
+cat("\nSpot-level zonation table saved:\n")
+cat(file.path(dir_tab, "checkpoint5_spot_level_zonation_scores.csv"), "\n")
+
+############################################################
+## 9. Export section-level zonation summary
+############################################################
+
+section_zonation_summary <- aggregate(
+  cbind(CentralScore, PortalScore, ZonationIndex) ~ gsm + donor + condition + section,
+  data = spot_zonation_df,
+  FUN = function(x) mean(x, na.rm = TRUE)
+)
+
+section_zonation_summary$n_spots <- aggregate(
+  barcode ~ gsm + donor + condition + section,
+  data = spot_zonation_df,
+  FUN = length
+)$barcode
+
+write.csv(
+  section_zonation_summary,
+  file = file.path(dir_tab, "checkpoint5_section_level_zonation_summary.csv"),
+  row.names = FALSE
+)
+
+cat("\nSection-level zonation summary:\n")
+print(section_zonation_summary)
+
+############################################################
+## 10. Spatial plots: individual zonation markers
+############################################################
+
+for (gsm in names(obj_list_zonation)) {
+  
+  obj <- obj_list_zonation[[gsm]]
+  DefaultAssay(obj) <- "Spatial"
+  
+  markers_present <- zonation_markers[zonation_markers %in% rownames(obj)]
+  
+  if (length(markers_present) == 0) {
+    warning("No zonation markers detected in ", gsm)
+    next
+  }
+  
+  p_marker <- SpatialFeaturePlot(
+    object = obj,
+    features = markers_present,
+    ncol = 2,
+    pt.size.factor = 1.6
+  )
+  
+  pdf(
+    file = file.path(dir_fig, paste0(gsm, "_zonation_marker_spatial_plots.pdf")),
+    width = 10,
+    height = 8
+  )
+  print(p_marker)
+  dev.off()
+}
+
+############################################################
+## 11. Spatial plots: central score, portal score, zonation index
+############################################################
+
+for (gsm in names(obj_list_zonation)) {
+  
+  obj <- obj_list_zonation[[gsm]]
+  DefaultAssay(obj) <- "Spatial"
+  
+  p_score <- SpatialFeaturePlot(
+    object = obj,
+    features = c("CentralScore", "PortalScore", "ZonationIndex"),
+    ncol = 3,
+    pt.size.factor = 1.6
+  )
+  
+  pdf(
+    file = file.path(dir_fig, paste0(gsm, "_zonation_score_spatial_plots.pdf")),
+    width = 15,
+    height = 5
+  )
+  print(p_score)
+  dev.off()
+}
+
+############################################################
+## 12. Save zonation-scored object list
+############################################################
+
+saveRDS(
+  obj_list_zonation,
+  file = file.path(dir_out, "checkpoint5_zonation_scored_Seurat_object_list.rds")
+)
+
+writeLines(
+  capture.output(sessionInfo()),
+  con = file.path(dir_out, "checkpoint5_sessionInfo.txt")
+)
+
+############################################################
+## 13. Completion message
+############################################################
+
+cat("\nCheckpoint 5 completed.\n")
+cat("Saved zonation-scored object list:\n")
+cat(file.path(dir_out, "checkpoint5_zonation_scored_Seurat_object_list.rds"), "\n")
+cat("Saved marker presence table:\n")
+cat(file.path(dir_tab, "checkpoint5_zonation_marker_presence.csv"), "\n")
+cat("Saved spot-level zonation table:\n")
+cat(file.path(dir_tab, "checkpoint5_spot_level_zonation_scores.csv"), "\n")
+cat("Saved section-level summary:\n")
+cat(file.path(dir_tab, "checkpoint5_section_level_zonation_summary.csv"), "\n")
+cat("Saved spatial plots in:\n")
+cat(dir_fig, "\n")
+
+
+print(gene_presence_df)
+print(section_zonation_summary)
