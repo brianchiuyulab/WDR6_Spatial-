@@ -1,0 +1,298 @@
+############################################################
+## Checkpoint 6
+## WDR6-axis gene detectability and spatial preview
+## Dataset: GSE192742 human liver Visium
+##
+## Input:
+##   checkpoint5_zonation_scored_Seurat_object_list.rds
+##
+## Purpose:
+##   1. Check whether WDR6-axis genes are present in the Visium matrix.
+##   2. Quantify spot-level detectability for each gene in each section.
+##   3. Generate individual spatial preview plots for WDR6-axis genes.
+##
+## WDR6-axis genes:
+##   WDR6, FASN, PLA2G4A, CYP2C8, EPHX2, CYP4A11, CYP4F2
+##
+## Notes:
+##   - Each Visium section is analyzed independently.
+##   - No module score is generated in this checkpoint.
+##   - No group comparison is performed in this checkpoint.
+##   - No Seurat object integration or Harmony correction is performed.
+############################################################
+
+set.seed(20260608)
+options(stringsAsFactors = FALSE)
+
+############################################################
+## 1. Set directories
+############################################################
+
+project_name <- "GSE192742_WDR6_spatial"
+base_dir <- file.path(getwd(), project_name)
+
+dir_out <- file.path(base_dir, "checkpoint_outputs")
+dir_fig <- file.path(dir_out, "checkpoint6_WDR6_axis_gene_figures")
+dir_tab <- file.path(dir_out, "checkpoint6_WDR6_axis_gene_tables")
+
+dir.create(dir_fig, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_tab, showWarnings = FALSE, recursive = TRUE)
+
+############################################################
+## 2. Load packages
+############################################################
+
+required_pkgs <- c("Seurat", "ggplot2", "patchwork", "Matrix")
+
+missing_pkgs <- required_pkgs[
+  !vapply(required_pkgs, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_pkgs) > 0) {
+  stop(
+    "Missing packages: ",
+    paste(missing_pkgs, collapse = ", "),
+    "\nPlease install them before running this script."
+  )
+}
+
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(Matrix)
+
+############################################################
+## 3. Load zonation-scored Seurat object list
+############################################################
+
+obj_list <- readRDS(
+  file.path(dir_out, "checkpoint5_zonation_scored_Seurat_object_list.rds")
+)
+
+cat("\nLoaded objects:\n")
+print(names(obj_list))
+
+############################################################
+## 4. Define WDR6-axis genes
+############################################################
+
+wdr6_axis_genes <- c(
+  "WDR6",
+  "FASN",
+  "PLA2G4A",
+  "CYP2C8",
+  "EPHX2",
+  "CYP4A11",
+  "CYP4F2"
+)
+
+############################################################
+## 5. Gene presence and detectability table
+############################################################
+
+detectability_list <- lapply(names(obj_list), function(gsm) {
+  
+  obj <- obj_list[[gsm]]
+  DefaultAssay(obj) <- "Spatial"
+  
+  counts_mat <- GetAssayData(
+    object = obj,
+    assay = "Spatial",
+    slot = "counts"
+  )
+  
+  data_mat <- GetAssayData(
+    object = obj,
+    assay = "Spatial",
+    slot = "data"
+  )
+  
+  out <- lapply(wdr6_axis_genes, function(gene) {
+    
+    gene_present <- gene %in% rownames(counts_mat)
+    
+    if (!gene_present) {
+      return(data.frame(
+        gsm = unique(obj$gsm),
+        donor = unique(obj$donor),
+        condition = unique(obj$condition),
+        section = unique(obj$section),
+        gene = gene,
+        gene_present = FALSE,
+        n_spots_total = ncol(obj),
+        n_spots_raw_count_gt0 = NA_integer_,
+        percent_spots_raw_count_gt0 = NA_real_,
+        mean_raw_count_all_spots = NA_real_,
+        mean_raw_count_detected_spots = NA_real_,
+        mean_log_normalized_expression_all_spots = NA_real_,
+        stringsAsFactors = FALSE
+      ))
+    }
+    
+    raw_counts <- counts_mat[gene, ]
+    log_expr <- data_mat[gene, ]
+    detected <- raw_counts > 0
+    
+    data.frame(
+      gsm = unique(obj$gsm),
+      donor = unique(obj$donor),
+      condition = unique(obj$condition),
+      section = unique(obj$section),
+      gene = gene,
+      gene_present = TRUE,
+      n_spots_total = ncol(obj),
+      n_spots_raw_count_gt0 = sum(detected),
+      percent_spots_raw_count_gt0 = 100 * mean(detected),
+      mean_raw_count_all_spots = mean(raw_counts),
+      mean_raw_count_detected_spots = ifelse(
+        sum(detected) > 0,
+        mean(raw_counts[detected]),
+        NA_real_
+      ),
+      mean_log_normalized_expression_all_spots = mean(log_expr),
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  do.call(rbind, out)
+})
+
+detectability_df <- do.call(rbind, detectability_list)
+
+cat("\nWDR6-axis gene detectability by sample:\n")
+print(detectability_df)
+
+write.csv(
+  detectability_df,
+  file = file.path(dir_tab, "checkpoint6_WDR6_axis_gene_detectability_by_sample.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 6. Overall detectability summary
+############################################################
+
+overall_detectability <- aggregate(
+  cbind(n_spots_raw_count_gt0, n_spots_total) ~ gene + gene_present,
+  data = detectability_df,
+  FUN = sum,
+  na.rm = TRUE
+)
+
+overall_detectability$percent_spots_raw_count_gt0_overall <-
+  100 * overall_detectability$n_spots_raw_count_gt0 /
+  overall_detectability$n_spots_total
+
+cat("\nOverall WDR6-axis gene detectability:\n")
+print(overall_detectability)
+
+write.csv(
+  overall_detectability,
+  file = file.path(dir_tab, "checkpoint6_WDR6_axis_gene_detectability_overall.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 7. Export spot-level expression table for WDR6-axis genes
+############################################################
+
+spot_expression_list <- lapply(names(obj_list), function(gsm) {
+  
+  obj <- obj_list[[gsm]]
+  DefaultAssay(obj) <- "Spatial"
+  
+  genes_present <- wdr6_axis_genes[wdr6_axis_genes %in% rownames(obj)]
+  
+  if (length(genes_present) == 0) {
+    warning("No WDR6-axis genes present in ", gsm)
+    return(NULL)
+  }
+  
+  expr_df <- FetchData(
+    object = obj,
+    vars = genes_present,
+    slot = "data"
+  )
+  
+  expr_df$barcode <- rownames(expr_df)
+  expr_df$gsm <- unique(obj$gsm)
+  expr_df$donor <- unique(obj$donor)
+  expr_df$condition <- unique(obj$condition)
+  expr_df$section <- unique(obj$section)
+  expr_df$CentralScore <- obj$CentralScore
+  expr_df$PortalScore <- obj$PortalScore
+  expr_df$ZonationIndex <- obj$ZonationIndex
+  
+  expr_df
+})
+
+spot_expression_df <- do.call(rbind, spot_expression_list)
+
+write.csv(
+  spot_expression_df,
+  file = file.path(dir_tab, "checkpoint6_spot_level_WDR6_axis_gene_expression.csv"),
+  row.names = FALSE
+)
+
+cat("\nSpot-level WDR6-axis expression table saved:\n")
+cat(file.path(dir_tab, "checkpoint6_spot_level_WDR6_axis_gene_expression.csv"), "\n")
+
+############################################################
+## 8. Spatial preview plots for individual WDR6-axis genes
+############################################################
+
+for (gsm in names(obj_list)) {
+  
+  obj <- obj_list[[gsm]]
+  DefaultAssay(obj) <- "Spatial"
+  
+  genes_present <- wdr6_axis_genes[wdr6_axis_genes %in% rownames(obj)]
+  
+  if (length(genes_present) == 0) {
+    warning("No WDR6-axis genes detected in matrix for ", gsm)
+    next
+  }
+  
+  p_gene <- SpatialFeaturePlot(
+    object = obj,
+    features = genes_present,
+    ncol = 3,
+    pt.size.factor = 1.6
+  )
+  
+  pdf(
+    file = file.path(dir_fig, paste0(gsm, "_WDR6_axis_gene_spatial_preview.pdf")),
+    width = 12,
+    height = ceiling(length(genes_present) / 3) * 4
+  )
+  print(p_gene)
+  dev.off()
+}
+
+############################################################
+## 9. Save object list unchanged
+############################################################
+
+saveRDS(
+  obj_list,
+  file = file.path(dir_out, "checkpoint6_WDR6_axis_gene_preview_object_list_unchanged.rds")
+)
+
+writeLines(
+  capture.output(sessionInfo()),
+  con = file.path(dir_out, "checkpoint6_sessionInfo.txt")
+)
+
+############################################################
+## 10. Completion message
+############################################################
+
+cat("\nCheckpoint 6 completed.\n")
+cat("Saved detectability by sample:\n")
+cat(file.path(dir_tab, "checkpoint6_WDR6_axis_gene_detectability_by_sample.csv"), "\n")
+cat("Saved overall detectability:\n")
+cat(file.path(dir_tab, "checkpoint6_WDR6_axis_gene_detectability_overall.csv"), "\n")
+cat("Saved spot-level expression table:\n")
+cat(file.path(dir_tab, "checkpoint6_spot_level_WDR6_axis_gene_expression.csv"), "\n")
+cat("Saved spatial preview plots in:\n")
+cat(dir_fig, "\n")
