@@ -1,0 +1,126 @@
+############################################################
+## Checkpoint 4
+## Per-sample normalization of GSE192742 human Visium objects
+##
+## Input:
+##   checkpoint3_analysis_input_Seurat_object_list.rds
+##
+## Output:
+##   checkpoint4_logNormalized_Seurat_object_list.rds
+##   checkpoint4_normalization_summary.csv
+##
+## Purpose:
+##   Normalize each Visium section independently using Seurat
+##   LogNormalize. No integration or Harmony is performed.
+############################################################
+
+project_name <- "GSE192742_WDR6_spatial"
+base_dir <- file.path(getwd(), project_name)
+
+dir_out <- file.path(base_dir, "checkpoint_outputs")
+
+if (!requireNamespace("Seurat", quietly = TRUE)) {
+  stop("Please install Seurat first.")
+}
+
+library(Seurat)
+
+## -----------------------------
+## 1. Load Step 3 analysis input
+## -----------------------------
+
+obj_list <- readRDS(
+  file.path(dir_out, "checkpoint3_analysis_input_Seurat_object_list.rds")
+)
+
+cat("\nObjects loaded from Step 3:\n")
+print(names(obj_list))
+
+## -----------------------------
+## 2. Normalize each Visium sample independently
+## -----------------------------
+
+obj_list_norm <- lapply(names(obj_list), function(gsm) {
+  
+  obj <- obj_list[[gsm]]
+  
+  cat("\nNormalizing sample:", gsm, "\n")
+  
+  DefaultAssay(obj) <- "Spatial"
+  
+  obj <- NormalizeData(
+    object = obj,
+    assay = "Spatial",
+    normalization.method = "LogNormalize",
+    scale.factor = 10000,
+    verbose = FALSE
+  )
+  
+  obj <- FindVariableFeatures(
+    object = obj,
+    assay = "Spatial",
+    selection.method = "vst",
+    nfeatures = 3000,
+    verbose = FALSE
+  )
+  
+  return(obj)
+})
+
+names(obj_list_norm) <- names(obj_list)
+
+## -----------------------------
+## 3. Summarize normalization result
+## -----------------------------
+
+norm_summary <- do.call(
+  rbind,
+  lapply(names(obj_list_norm), function(gsm) {
+    
+    obj <- obj_list_norm[[gsm]]
+    
+    data.frame(
+      gsm = unique(obj$gsm),
+      jbo = unique(obj$jbo),
+      donor = unique(obj$donor),
+      condition = unique(obj$condition),
+      section = unique(obj$section),
+      n_spots = ncol(obj),
+      n_features_total = nrow(obj),
+      n_variable_features = length(VariableFeatures(obj)),
+      assay = DefaultAssay(obj),
+      normalization = "LogNormalize_scale.factor_10000",
+      integration_or_harmony = "No",
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
+cat("\nNormalization summary:\n")
+print(norm_summary)
+
+write.csv(
+  norm_summary,
+  file = file.path(dir_out, "checkpoint4_normalization_summary.csv"),
+  row.names = FALSE
+)
+
+## -----------------------------
+## 4. Save normalized object list
+## -----------------------------
+
+saveRDS(
+  obj_list_norm,
+  file = file.path(dir_out, "checkpoint4_logNormalized_Seurat_object_list.rds")
+)
+
+writeLines(
+  capture.output(sessionInfo()),
+  con = file.path(dir_out, "checkpoint4_sessionInfo.txt")
+)
+
+cat("\nCheckpoint 4 completed.\n")
+cat("Saved normalized object list:\n")
+cat(file.path(dir_out, "checkpoint4_logNormalized_Seurat_object_list.rds"), "\n")
+cat("Saved normalization summary:\n")
+cat(file.path(dir_out, "checkpoint4_normalization_summary.csv"), "\n")
