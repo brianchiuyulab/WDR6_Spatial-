@@ -1,0 +1,152 @@
+############################################################
+## Checkpoint 3
+## QC review and analysis-input object generation
+## Dataset: GSE192742 human liver Visium
+##
+## Purpose:
+##   1. Review sample-level raw QC metrics.
+##   2. Generate QC summary plots.
+##   3. Retain all GEO-filtered Visium spots for downstream analysis.
+##
+## Rationale:
+##   The input data are GEO-provided filtered_feature_bc_matrix files,
+##   not raw barcode matrices. Sample-level QC metrics were acceptable.
+##   Therefore, no additional spot-level filtering was applied to avoid
+##   disrupting spatial tissue structure.
+############################################################
+
+project_name <- "GSE192742_WDR6_spatial"
+base_dir <- file.path(getwd(), project_name)
+
+dir_out <- file.path(base_dir, "checkpoint_outputs")
+dir_fig <- file.path(dir_out, "checkpoint3_QC_review_figures")
+
+dir.create(dir_out, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_fig, showWarnings = FALSE, recursive = TRUE)
+
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  stop("Please install ggplot2 first.")
+}
+
+if (!requireNamespace("patchwork", quietly = TRUE)) {
+  stop("Please install patchwork first.")
+}
+
+library(ggplot2)
+library(patchwork)
+
+############################################################
+## Step 3A
+## Inspect raw QC summary
+############################################################
+
+obj_list <- readRDS(
+  file.path(dir_out, "checkpoint2_raw_Seurat_object_list.rds")
+)
+
+qc_summary <- read.csv(
+  file.path(dir_out, "checkpoint2_raw_QC_summary.csv"),
+  stringsAsFactors = FALSE
+)
+
+cat("\nRaw QC summary:\n")
+print(qc_summary)
+
+## Sample-level QC plots
+p1 <- ggplot(qc_summary, aes(x = gsm, y = n_spots, fill = condition)) +
+  geom_col() +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    x = NULL,
+    y = "Number of spots",
+    title = "Spots per Visium section"
+  )
+
+p2 <- ggplot(qc_summary, aes(x = gsm, y = median_nCount_Spatial, fill = condition)) +
+  geom_col() +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    x = NULL,
+    y = "Median UMI counts",
+    title = "Median nCount_Spatial"
+  )
+
+p3 <- ggplot(qc_summary, aes(x = gsm, y = median_nFeature_Spatial, fill = condition)) +
+  geom_col() +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    x = NULL,
+    y = "Median detected genes",
+    title = "Median nFeature_Spatial"
+  )
+
+p4 <- ggplot(qc_summary, aes(x = gsm, y = median_percent_mt, fill = condition)) +
+  geom_col() +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    x = NULL,
+    y = "Median percent.mt",
+    title = "Median mitochondrial percentage"
+  )
+
+pdf(
+  file = file.path(dir_fig, "checkpoint3A_sample_level_raw_QC_summary.pdf"),
+  width = 12,
+  height = 8
+)
+print((p1 + p2) / (p3 + p4))
+dev.off()
+
+############################################################
+## Step 3B
+## QC decision: retain all GEO-filtered spots
+############################################################
+
+qc_decision <- data.frame(
+  gsm = qc_summary$gsm,
+  jbo = qc_summary$jbo,
+  donor = qc_summary$donor,
+  condition = qc_summary$condition,
+  section = qc_summary$section,
+  n_spots_retained = qc_summary$n_spots,
+  additional_spot_filtering = "No",
+  rationale = paste(
+    "The analysis used GEO-provided filtered_feature_bc_matrix files.",
+    "Sample-level QC metrics were acceptable.",
+    "All GEO-filtered Visium spots were retained to preserve spatial tissue structure."
+  ),
+  stringsAsFactors = FALSE
+)
+
+cat("\nQC decision:\n")
+print(qc_decision)
+
+write.csv(
+  qc_decision,
+  file = file.path(dir_out, "checkpoint3_QC_decision_retain_all_GEO_filtered_spots.csv"),
+  row.names = FALSE
+)
+
+## Save the object list for downstream analysis
+saveRDS(
+  obj_list,
+  file = file.path(dir_out, "checkpoint3_analysis_input_Seurat_object_list.rds")
+)
+
+writeLines(
+  capture.output(sessionInfo()),
+  con = file.path(dir_out, "checkpoint3_sessionInfo.txt")
+)
+
+cat("\nCheckpoint 3 completed.\n")
+cat("All GEO-filtered Visium spots were retained.\n")
+cat("Saved analysis input object list:\n")
+cat(file.path(dir_out, "checkpoint3_analysis_input_Seurat_object_list.rds"), "\n")
+cat("Saved QC decision table:\n")
+cat(file.path(dir_out, "checkpoint3_QC_decision_retain_all_GEO_filtered_spots.csv"), "\n")
+cat("Saved QC plot:\n")
+cat(file.path(dir_fig, "checkpoint3A_sample_level_raw_QC_summary.pdf"), "\n")
