@@ -1,7 +1,7 @@
 ############################################################
 ## Checkpoint 7
-## Lipid Remodeling Module and WDR6 association in
-## CYP2E1-defined central-like hepatocyte-enriched Visium spots
+## StrictCentral Lipid Remodeling Module and WDR6 association
+## in human liver Visium spatial transcriptomics
 ##
 ## Dataset:
 ##   GSE192742 human liver Visium
@@ -12,13 +12,16 @@
 ## Purpose:
 ##   1. Compute hepatocyte score for each Visium spot.
 ##   2. Restrict analysis to hepatocyte-enriched spots within each section.
-##   3. Define central-like regions using CYP2E1 expression tertiles
-##      within hepatocyte-enriched spots.
+##   3. Define strict central-like and strict low-central-like regions using:
+##        High central-like:
+##          CentralScore top quartile AND PortalScore bottom quartile
+##        Low central-like:
+##          CentralScore bottom quartile AND PortalScore top quartile
 ##   4. Compute a Lipid Remodeling Module score excluding WDR6.
-##   5. Compare Steatotic versus Healthy fold change of the module
-##      in high-central-like and low-central-like regions.
-##   6. Test whether WDR6 correlates with the Lipid Remodeling Module
-##      across condition and central-like region.
+##   5. Compare Steatotic versus Healthy fold change of the module in
+##      StrictCentral high versus StrictCentral low regions.
+##   6. Test WDR6 correlation with the Lipid Remodeling Module in each
+##      condition and StrictCentral group.
 ##
 ## Hepatocyte markers:
 ##   ALB, APOA1, APOC3, TTR, HP, FGA, FGB, FGG
@@ -28,13 +31,18 @@
 ##
 ## Important:
 ##   - WDR6 is NOT included in the Lipid Remodeling Module.
-##   - WDR6 is analyzed separately for correlation with the module.
+##   - WDR6 is analyzed separately for expression and correlation.
 ##
-## Central-like definition:
-##   CYP2E1 expression tertiles within hepatocyte-enriched spots.
-##   - Low central-like: bottom tertile of CYP2E1
-##   - Mid: middle tertile of CYP2E1
-##   - High central-like: top tertile of CYP2E1
+## StrictCentral definition:
+##   Within hepatocyte-enriched spots of each section:
+##     CentralScoreQuartile = quartile rank of CentralScore
+##     PortalScoreQuartile  = quartile rank of PortalScore
+##
+##   High central-like:
+##     CentralScoreQuartile == 4 AND PortalScoreQuartile == 1
+##
+##   Low central-like:
+##     CentralScoreQuartile == 1 AND PortalScoreQuartile == 4
 ##
 ## Hepatocyte-enriched spot definition:
 ##   HepatocyteScore >= section median.
@@ -45,8 +53,8 @@
 ##     CYP4A11, and CYP4F2.
 ##
 ## Primary module effect size:
-##   FC_high = Steatotic / Healthy module expression in high-central-like spots.
-##   FC_low  = Steatotic / Healthy module expression in low-central-like spots.
+##   FC_high = Steatotic / Healthy module expression in high central-like spots.
+##   FC_low  = Steatotic / Healthy module expression in low central-like spots.
 ##   Interaction_ratio = FC_high / FC_low.
 ##
 ## WDR6-module association:
@@ -77,8 +85,8 @@ project_name <- "GSE192742_WDR6_spatial"
 base_dir <- file.path(getwd(), project_name)
 
 dir_out <- file.path(base_dir, "checkpoint_outputs")
-dir_fig <- file.path(dir_out, "checkpoint7_lipid_remodeling_module_figures")
-dir_tab <- file.path(dir_out, "checkpoint7_lipid_remodeling_module_tables")
+dir_fig <- file.path(dir_out, "checkpoint7_StrictCentral_LipidRemodeling_figures")
+dir_tab <- file.path(dir_out, "checkpoint7_StrictCentral_LipidRemodeling_tables")
 
 dir.create(dir_fig, showWarnings = FALSE, recursive = TRUE)
 dir.create(dir_tab, showWarnings = FALSE, recursive = TRUE)
@@ -131,30 +139,31 @@ lipid_remodeling_module <- c(
   "FASN", "CYP2C8", "EPHX2", "CYP4A11", "CYP4F2"
 )
 
-central_marker <- "CYP2E1"
-
 tracking_genes <- unique(c(
   hepatocyte_markers,
   lipid_remodeling_module,
-  central_marker,
-  "WDR6"
+  "WDR6",
+  "GLUL",
+  "CYP2E1",
+  "HAL",
+  "SDS"
 ))
 
 writeLines(
   c(
-    "Checkpoint 7: Lipid Remodeling Module and WDR6 association.",
+    "Checkpoint 7: StrictCentral Lipid Remodeling Module and WDR6 association.",
     paste0("Hepatocyte_markers: ", paste(hepatocyte_markers, collapse = ", ")),
     paste0("Lipid_Remodeling_Module: ", paste(lipid_remodeling_module, collapse = ", ")),
     "WDR6 is excluded from the Lipid Remodeling Module and analyzed separately.",
-    paste0("Central_marker: ", central_marker),
-    "Central groups are defined by CYP2E1 tertiles within hepatocyte-enriched spots.",
     "Hepatocyte-enriched spots are defined as HepatocyteScore >= section median.",
+    "StrictCentral high: CentralScore top quartile and PortalScore bottom quartile.",
+    "StrictCentral low: CentralScore bottom quartile and PortalScore top quartile.",
     "Primary module score is mean log-normalized expression.",
     "Primary module effect size is interaction_ratio = FC_high / FC_low.",
     "WDR6-module association is evaluated by Spearman correlation.",
     "Spot-level p values are exploratory only because spots are not independent biological replicates."
   ),
-  con = file.path(dir_tab, "checkpoint7_analysis_definition.txt")
+  con = file.path(dir_tab, "checkpoint7_StrictCentral_analysis_definition.txt")
 )
 
 ############################################################
@@ -254,7 +263,7 @@ safe_spearman <- function(x, y) {
 }
 
 ############################################################
-## 6. Add hepatocyte score, CYP2E1, WDR6, and module score
+## 6. Add hepatocyte score, WDR6, and Lipid Remodeling Module
 ############################################################
 
 obj_list_step7 <- lapply(names(obj_list), function(gsm) {
@@ -287,10 +296,6 @@ obj_list_step7 <- lapply(names(obj_list), function(gsm) {
     stop("No Lipid Remodeling Module genes detected in ", gsm)
   }
   
-  if (!(central_marker %in% rownames(data_mat))) {
-    stop("CYP2E1 is not detected in ", gsm)
-  }
-  
   cat("Detected hepatocyte markers:", paste(hepatocyte_genes_present, collapse = ", "), "\n")
   cat("Detected module genes:", paste(module_genes_present, collapse = ", "), "\n")
   
@@ -298,10 +303,6 @@ obj_list_step7 <- lapply(names(obj_list), function(gsm) {
   obj$HepatocyteScore <- mean_log_score(data_mat, hepatocyte_markers)
   hepatocyte_cutoff <- median(obj$HepatocyteScore, na.rm = TRUE)
   obj$HepatocyteEnriched <- obj$HepatocyteScore >= hepatocyte_cutoff
-  
-  ## Central marker
-  obj$CYP2E1_logNorm <- get_gene_expr(data_mat, "CYP2E1")
-  obj$CYP2E1_detected <- get_gene_detected(counts_mat, "CYP2E1")
   
   ## WDR6 single gene, analyzed separately
   obj$WDR6_logNorm <- get_gene_expr(data_mat, "WDR6")
@@ -324,8 +325,8 @@ obj_list_step7 <- lapply(names(obj_list), function(gsm) {
   obj$LipidRemodelingModule_detected_strict <-
     obj$LipidRemodelingModule_n_genes_detected >= 3
   
-  ## Individual module genes, useful for later figure checks
-  for (gene in lipid_remodeling_module) {
+  ## Individual tracking genes
+  for (gene in unique(c(lipid_remodeling_module, "WDR6", "GLUL", "CYP2E1", "HAL", "SDS"))) {
     obj[[paste0(gene, "_logNorm")]] <- get_gene_expr(data_mat, gene)
     obj[[paste0(gene, "_detected")]] <- get_gene_detected(counts_mat, gene)
   }
@@ -369,8 +370,14 @@ spot_list <- lapply(names(obj_list_step7), function(gsm) {
     HepatocyteEnriched = obj$HepatocyteEnriched,
     HepatocyteScore_cutoff_used = obj$HepatocyteScore_cutoff_used,
     
+    GLUL_logNorm = obj$GLUL_logNorm,
+    GLUL_detected = obj$GLUL_detected,
     CYP2E1_logNorm = obj$CYP2E1_logNorm,
     CYP2E1_detected = obj$CYP2E1_detected,
+    HAL_logNorm = obj$HAL_logNorm,
+    HAL_detected = obj$HAL_detected,
+    SDS_logNorm = obj$SDS_logNorm,
+    SDS_detected = obj$SDS_detected,
     
     WDR6_logNorm = obj$WDR6_logNorm,
     WDR6_detected = obj$WDR6_detected,
@@ -408,7 +415,7 @@ spot_df <- do.call(rbind, spot_list)
 
 write.csv(
   spot_df,
-  file = file.path(dir_tab, "checkpoint7_spot_level_lipid_remodeling_module.csv"),
+  file = file.path(dir_tab, "checkpoint7_spot_level_StrictCentral_LipidRemodeling.csv"),
   row.names = FALSE
 )
 
@@ -435,9 +442,6 @@ qc_summary <- spot_df %>%
     mean_percent_mt_hepatocyte_enriched =
       mean(percent.mt[HepatocyteEnriched], na.rm = TRUE),
     
-    percent_CYP2E1_detected_hepatocyte_enriched =
-      100 * mean(CYP2E1_detected[HepatocyteEnriched], na.rm = TRUE),
-    
     percent_WDR6_detected_hepatocyte_enriched =
       100 * mean(WDR6_detected[HepatocyteEnriched], na.rm = TRUE),
     
@@ -460,46 +464,61 @@ write.csv(
 )
 
 ############################################################
-## 9. Define CYP2E1 central-like tertiles within hepatocyte-enriched spots
+## 9. Define StrictCentral quartile groups
 ############################################################
 
-spot_df_hep <- spot_df %>%
+spot_df_strict <- spot_df %>%
   filter(HepatocyteEnriched) %>%
   group_by(gsm) %>%
   mutate(
-    CYP2E1_Tertile = ntile(CYP2E1_logNorm, 3),
-    CentralGroup = case_when(
-      CYP2E1_Tertile == 1 ~ "Low central-like",
-      CYP2E1_Tertile == 2 ~ "Mid",
-      CYP2E1_Tertile == 3 ~ "High central-like",
-      TRUE ~ NA_character_
+    CentralScoreQuartile = ntile(CentralScore, 4),
+    PortalScoreQuartile = ntile(PortalScore, 4),
+    
+    StrictCentralGroup = case_when(
+      CentralScoreQuartile == 4 & PortalScoreQuartile == 1 ~ "High central-like",
+      CentralScoreQuartile == 1 & PortalScoreQuartile == 4 ~ "Low central-like",
+      TRUE ~ "Other"
     )
   ) %>%
   ungroup()
 
+strict_analysis_df <- spot_df_strict %>%
+  filter(StrictCentralGroup %in% c("Low central-like", "High central-like"))
+
 write.csv(
-  spot_df_hep,
-  file = file.path(dir_tab, "checkpoint7_hepatocyte_enriched_spots_with_CYP2E1_tertiles.csv"),
+  spot_df_strict,
+  file = file.path(dir_tab, "checkpoint7_hepatocyte_enriched_spots_with_StrictCentral_quartiles.csv"),
   row.names = FALSE
 )
 
+write.csv(
+  strict_analysis_df,
+  file = file.path(dir_tab, "checkpoint7_StrictCentral_analysis_spots_only.csv"),
+  row.names = FALSE
+)
+
+cat("\nStrictCentral group counts:\n")
+print(table(strict_analysis_df$condition, strict_analysis_df$StrictCentralGroup))
+
 ############################################################
-## 10. Section-level central group summary
+## 10. Section-level StrictCentral summary
 ############################################################
 
-section_group_summary <- spot_df_hep %>%
-  group_by(gsm, donor, condition, section, CentralGroup) %>%
+section_group_summary <- strict_analysis_df %>%
+  group_by(gsm, donor, condition, section, StrictCentralGroup) %>%
   summarise(
     n_spots = n(),
     
-    mean_CYP2E1_logNorm = mean(CYP2E1_logNorm, na.rm = TRUE),
-    median_CYP2E1_logNorm = median(CYP2E1_logNorm, na.rm = TRUE),
-    
+    mean_CentralScore = mean(CentralScore, na.rm = TRUE),
+    mean_PortalScore = mean(PortalScore, na.rm = TRUE),
     mean_ZonationIndex = mean(ZonationIndex, na.rm = TRUE),
-    median_ZonationIndex = median(ZonationIndex, na.rm = TRUE),
+    
+    mean_GLUL_logNorm = mean(GLUL_logNorm, na.rm = TRUE),
+    mean_CYP2E1_logNorm = mean(CYP2E1_logNorm, na.rm = TRUE),
+    mean_HAL_logNorm = mean(HAL_logNorm, na.rm = TRUE),
+    mean_SDS_logNorm = mean(SDS_logNorm, na.rm = TRUE),
     
     mean_HepatocyteScore = mean(HepatocyteScore, na.rm = TRUE),
-    median_HepatocyteScore = median(HepatocyteScore, na.rm = TRUE),
     
     WDR6_detection_rate = 100 * mean(WDR6_detected, na.rm = TRUE),
     WDR6_mean_logNorm_all = mean(WDR6_logNorm, na.rm = TRUE),
@@ -537,28 +556,35 @@ section_group_summary <- spot_df_hep %>%
     .groups = "drop"
   )
 
-cat("\nSection-level central group summary:\n")
+cat("\nSection-level StrictCentral summary:\n")
 print(section_group_summary, width = Inf)
 
 write.csv(
   section_group_summary,
-  file = file.path(dir_tab, "checkpoint7_section_group_summary.csv"),
+  file = file.path(dir_tab, "checkpoint7_section_group_summary_StrictCentral.csv"),
   row.names = FALSE
 )
 
 ############################################################
-## 11. Donor-level central group summary
+## 11. Donor-level StrictCentral summary
 ## H35 has two sections and is averaged into one donor.
 ############################################################
 
 donor_group_summary <- section_group_summary %>%
-  group_by(donor, condition, CentralGroup) %>%
+  group_by(donor, condition, StrictCentralGroup) %>%
   summarise(
     n_sections = n(),
     mean_n_spots = mean(n_spots, na.rm = TRUE),
     
-    mean_CYP2E1_logNorm = mean(mean_CYP2E1_logNorm, na.rm = TRUE),
+    mean_CentralScore = mean(mean_CentralScore, na.rm = TRUE),
+    mean_PortalScore = mean(mean_PortalScore, na.rm = TRUE),
     mean_ZonationIndex = mean(mean_ZonationIndex, na.rm = TRUE),
+    
+    mean_GLUL_logNorm = mean(mean_GLUL_logNorm, na.rm = TRUE),
+    mean_CYP2E1_logNorm = mean(mean_CYP2E1_logNorm, na.rm = TRUE),
+    mean_HAL_logNorm = mean(mean_HAL_logNorm, na.rm = TRUE),
+    mean_SDS_logNorm = mean(mean_SDS_logNorm, na.rm = TRUE),
+    
     mean_HepatocyteScore = mean(mean_HepatocyteScore, na.rm = TRUE),
     
     mean_WDR6_detection_rate = mean(WDR6_detection_rate, na.rm = TRUE),
@@ -591,21 +617,21 @@ donor_group_summary <- section_group_summary %>%
     .groups = "drop"
   )
 
-cat("\nDonor-level central group summary:\n")
+cat("\nDonor-level StrictCentral summary:\n")
 print(donor_group_summary, width = Inf)
 
 write.csv(
   donor_group_summary,
-  file = file.path(dir_tab, "checkpoint7_donor_group_summary.csv"),
+  file = file.path(dir_tab, "checkpoint7_donor_group_summary_StrictCentral.csv"),
   row.names = FALSE
 )
 
 ############################################################
-## 12. Steatotic vs Healthy FC within each central group
+## 12. Steatotic vs Healthy FC within StrictCentral groups
 ############################################################
 
 condition_group_summary <- donor_group_summary %>%
-  group_by(condition, CentralGroup) %>%
+  group_by(condition, StrictCentralGroup) %>%
   summarise(
     n_donors = n(),
     
@@ -684,12 +710,12 @@ condition_fc <- condition_group_summary %>%
       group_mean_LipidRemodelingModule_n_genes_detected_Healthy
   )
 
-cat("\nSteatotic vs Healthy FC by central group:\n")
+cat("\nSteatotic vs Healthy FC by StrictCentral group:\n")
 print(condition_fc, width = Inf)
 
 write.csv(
   condition_fc,
-  file = file.path(dir_tab, "checkpoint7_condition_FC_by_CYP2E1_central_group.csv"),
+  file = file.path(dir_tab, "checkpoint7_condition_FC_by_StrictCentral_group.csv"),
   row.names = FALSE
 )
 
@@ -698,9 +724,9 @@ write.csv(
 ############################################################
 
 interaction_summary <- condition_fc %>%
-  filter(CentralGroup %in% c("Low central-like", "High central-like")) %>%
+  filter(StrictCentralGroup %in% c("Low central-like", "High central-like")) %>%
   select(
-    CentralGroup,
+    StrictCentralGroup,
     logFC_LipidRemodelingModule_all_Steatotic_vs_Healthy,
     FC_LipidRemodelingModule_all_Steatotic_vs_Healthy,
     logFC_LipidRemodelingModule_detected_any_Steatotic_vs_Healthy,
@@ -713,7 +739,7 @@ interaction_summary <- condition_fc %>%
     FC_FASN_all_Steatotic_vs_Healthy
   ) %>%
   pivot_wider(
-    names_from = CentralGroup,
+    names_from = StrictCentralGroup,
     values_from = c(
       logFC_LipidRemodelingModule_all_Steatotic_vs_Healthy,
       FC_LipidRemodelingModule_all_Steatotic_vs_Healthy,
@@ -780,11 +806,11 @@ write.csv(
 steatotic_high_low <- donor_group_summary %>%
   filter(
     condition == "Steatotic",
-    CentralGroup %in% c("Low central-like", "High central-like")
+    StrictCentralGroup %in% c("Low central-like", "High central-like")
   ) %>%
   select(
     donor,
-    CentralGroup,
+    StrictCentralGroup,
     mean_LipidRemodelingModule_logMean_all,
     mean_LipidRemodelingModule_logMean_detected_any,
     mean_WDR6_logNorm_all,
@@ -793,7 +819,7 @@ steatotic_high_low <- donor_group_summary %>%
     mean_LipidRemodelingModule_n_genes_detected
   ) %>%
   pivot_wider(
-    names_from = CentralGroup,
+    names_from = StrictCentralGroup,
     values_from = c(
       mean_LipidRemodelingModule_logMean_all,
       mean_LipidRemodelingModule_logMean_detected_any,
@@ -869,14 +895,12 @@ write.csv(
 
 ############################################################
 ## 15. WDR6 correlation with Lipid Remodeling Module
-##     across condition and CYP2E1-defined central groups
 ############################################################
 
-cor_input <- spot_df_hep %>%
-  filter(CentralGroup %in% c("Low central-like", "High central-like"))
+cor_input <- strict_analysis_df
 
 cor_by_condition_region <- cor_input %>%
-  group_by(condition, CentralGroup) %>%
+  group_by(condition, StrictCentralGroup) %>%
   group_modify(~ {
     
     cor_module <- safe_spearman(
@@ -917,12 +941,12 @@ cor_by_condition_region <- cor_input %>%
   }) %>%
   ungroup()
 
-cat("\nWDR6 correlation by condition and central group:\n")
+cat("\nWDR6 correlation by condition and StrictCentral group:\n")
 print(cor_by_condition_region, width = Inf)
 
 write.csv(
   cor_by_condition_region,
-  file = file.path(dir_tab, "checkpoint7_WDR6_correlation_by_condition_central_group.csv"),
+  file = file.path(dir_tab, "checkpoint7_WDR6_correlation_by_condition_StrictCentral_group.csv"),
   row.names = FALSE
 )
 
@@ -955,7 +979,7 @@ write.csv(
 ############################################################
 
 cor_by_section <- cor_input %>%
-  group_by(gsm, donor, condition, section, CentralGroup) %>%
+  group_by(gsm, donor, condition, section, StrictCentralGroup) %>%
   group_modify(~ {
     
     cor_module <- safe_spearman(
@@ -994,7 +1018,7 @@ write.csv(
 )
 
 cor_by_donor <- cor_by_section %>%
-  group_by(donor, condition, CentralGroup) %>%
+  group_by(donor, condition, StrictCentralGroup) %>%
   summarise(
     n_sections = n(),
     
@@ -1016,7 +1040,7 @@ cor_by_donor <- cor_by_section %>%
     .groups = "drop"
   )
 
-cat("\nDonor-level correlation summary:\n")
+cat("\nDonor-level WDR6 correlation summary:\n")
 print(cor_by_donor, width = Inf)
 
 write.csv(
@@ -1038,8 +1062,8 @@ for (gsm in names(obj_list_step7)) {
     object = obj,
     features = c(
       "HepatocyteScore",
-      "CYP2E1_logNorm",
-      "WDR6_logNorm",
+      "CentralScore",
+      "PortalScore",
       "LipidRemodelingModule_logMean"
     ),
     ncol = 4,
@@ -1047,7 +1071,7 @@ for (gsm in names(obj_list_step7)) {
   )
   
   pdf(
-    file = file.path(dir_fig, paste0(gsm, "_Hepatocyte_CYP2E1_WDR6_LipidRemodelingModule_spatial.pdf")),
+    file = file.path(dir_fig, paste0(gsm, "_Hepatocyte_Central_Portal_LipidRemodelingModule_spatial.pdf")),
     width = 16,
     height = 4
   )
@@ -1056,35 +1080,35 @@ for (gsm in names(obj_list_step7)) {
 }
 
 ############################################################
-## 18. Figures: module by central group
+## 18. Figures: module by StrictCentral group
 ############################################################
 
 p_module_box <- ggplot(
-  spot_df_hep,
-  aes(x = CentralGroup, y = LipidRemodelingModule_logMean)
+  strict_analysis_df,
+  aes(x = StrictCentralGroup, y = LipidRemodelingModule_logMean)
 ) +
   geom_boxplot(outlier.size = 0.3) +
   facet_wrap(~ section + condition, scales = "free_y") +
   theme_classic(base_size = 11) +
   theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
   labs(
-    title = "Lipid Remodeling Module across CYP2E1-defined central-like groups",
+    title = "Lipid Remodeling Module across StrictCentral groups",
     x = NULL,
     y = "Lipid Remodeling Module logMean"
   )
 
 ggsave(
-  filename = file.path(dir_fig, "checkpoint7_LipidRemodelingModule_by_CYP2E1_central_group.pdf"),
+  filename = file.path(dir_fig, "checkpoint7_LipidRemodelingModule_by_StrictCentral_group.pdf"),
   plot = p_module_box,
   width = 12,
   height = 7
 )
 
 p_donor <- donor_group_summary %>%
-  filter(CentralGroup %in% c("Low central-like", "High central-like")) %>%
+  filter(StrictCentralGroup %in% c("Low central-like", "High central-like")) %>%
   ggplot(
     aes(
-      x = CentralGroup,
+      x = StrictCentralGroup,
       y = mean_LipidRemodelingModule_logMean_detected_any,
       group = donor,
       color = condition
@@ -1096,13 +1120,13 @@ p_donor <- donor_group_summary %>%
   theme_classic(base_size = 11) +
   theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
   labs(
-    title = "Donor-level Lipid Remodeling Module in low vs high CYP2E1 central-like spots",
+    title = "Donor-level Lipid Remodeling Module in StrictCentral groups",
     x = NULL,
     y = "Donor-level module logMean, detected_any"
   )
 
 ggsave(
-  filename = file.path(dir_fig, "checkpoint7_donor_level_LipidRemodelingModule_low_vs_high.pdf"),
+  filename = file.path(dir_fig, "checkpoint7_donor_level_LipidRemodelingModule_StrictCentral.pdf"),
   plot = p_donor,
   width = 8,
   height = 4.5
@@ -1118,17 +1142,17 @@ p_cor_module <- ggplot(
 ) +
   geom_point(alpha = 0.35, size = 0.6) +
   geom_smooth(method = "lm", se = TRUE) +
-  facet_grid(condition ~ CentralGroup) +
+  facet_grid(condition ~ StrictCentralGroup) +
   theme_classic(base_size = 11) +
   labs(
     title = "WDR6 versus Lipid Remodeling Module",
-    subtitle = "Module excludes WDR6",
+    subtitle = "StrictCentral quartile definition, module excludes WDR6",
     x = "WDR6 log-normalized expression",
     y = "Lipid Remodeling Module logMean"
   )
 
 ggsave(
-  filename = file.path(dir_fig, "checkpoint7_WDR6_vs_LipidRemodelingModule_four_groups.pdf"),
+  filename = file.path(dir_fig, "checkpoint7_WDR6_vs_LipidRemodelingModule_StrictCentral_four_groups.pdf"),
   plot = p_cor_module,
   width = 9,
   height = 7
@@ -1140,16 +1164,17 @@ p_cor_fasn <- ggplot(
 ) +
   geom_point(alpha = 0.35, size = 0.6) +
   geom_smooth(method = "lm", se = TRUE) +
-  facet_grid(condition ~ CentralGroup) +
+  facet_grid(condition ~ StrictCentralGroup) +
   theme_classic(base_size = 11) +
   labs(
     title = "WDR6 versus FASN",
+    subtitle = "StrictCentral quartile definition",
     x = "WDR6 log-normalized expression",
     y = "FASN log-normalized expression"
   )
 
 ggsave(
-  filename = file.path(dir_fig, "checkpoint7_WDR6_vs_FASN_four_groups.pdf"),
+  filename = file.path(dir_fig, "checkpoint7_WDR6_vs_FASN_StrictCentral_four_groups.pdf"),
   plot = p_cor_fasn,
   width = 9,
   height = 7
@@ -1161,35 +1186,37 @@ ggsave(
 
 saveRDS(
   obj_list_step7,
-  file = file.path(dir_out, "checkpoint7_lipid_remodeling_module_Seurat_object_list.rds")
+  file = file.path(dir_out, "checkpoint7_StrictCentral_LipidRemodeling_Seurat_object_list.rds")
 )
 
 writeLines(
   capture.output(sessionInfo()),
-  con = file.path(dir_out, "checkpoint7_sessionInfo.txt")
+  con = file.path(dir_out, "checkpoint7_StrictCentral_sessionInfo.txt")
 )
 
 ############################################################
 ## 21. Completion message
 ############################################################
 
-cat("\nCheckpoint 7 completed.\n")
+cat("\nCheckpoint 7 StrictCentral completed.\n")
 cat("Saved spot-level table:\n")
-cat(file.path(dir_tab, "checkpoint7_spot_level_lipid_remodeling_module.csv"), "\n")
+cat(file.path(dir_tab, "checkpoint7_spot_level_StrictCentral_LipidRemodeling.csv"), "\n")
+cat("Saved StrictCentral analysis spots:\n")
+cat(file.path(dir_tab, "checkpoint7_StrictCentral_analysis_spots_only.csv"), "\n")
 cat("Saved QC summary:\n")
 cat(file.path(dir_tab, "checkpoint7_QC_summary.csv"), "\n")
 cat("Saved section group summary:\n")
-cat(file.path(dir_tab, "checkpoint7_section_group_summary.csv"), "\n")
+cat(file.path(dir_tab, "checkpoint7_section_group_summary_StrictCentral.csv"), "\n")
 cat("Saved donor group summary:\n")
-cat(file.path(dir_tab, "checkpoint7_donor_group_summary.csv"), "\n")
+cat(file.path(dir_tab, "checkpoint7_donor_group_summary_StrictCentral.csv"), "\n")
 cat("Saved condition FC table:\n")
-cat(file.path(dir_tab, "checkpoint7_condition_FC_by_CYP2E1_central_group.csv"), "\n")
+cat(file.path(dir_tab, "checkpoint7_condition_FC_by_StrictCentral_group.csv"), "\n")
 cat("Saved interaction summary:\n")
 cat(file.path(dir_tab, "checkpoint7_interaction_summary_high_over_low.csv"), "\n")
 cat("Saved steatotic high-minus-low summary:\n")
 cat(file.path(dir_tab, "checkpoint7_steatotic_high_minus_low_summary.csv"), "\n")
 cat("Saved WDR6 correlation table:\n")
-cat(file.path(dir_tab, "checkpoint7_WDR6_correlation_by_condition_central_group.csv"), "\n")
+cat(file.path(dir_tab, "checkpoint7_WDR6_correlation_by_condition_StrictCentral_group.csv"), "\n")
 cat("Saved WDR6 correlation rank table:\n")
 cat(file.path(dir_tab, "checkpoint7_WDR6_correlation_rank.csv"), "\n")
 cat("Saved donor-level WDR6 correlation table:\n")
@@ -1201,7 +1228,7 @@ cat(dir_fig, "\n")
 ## 22. Print final key outputs
 ############################################################
 
-cat("\nFinal key output 1: condition FC by central group\n")
+cat("\nFinal key output 1: condition FC by StrictCentral group\n")
 print(condition_fc, width = Inf)
 
 cat("\nFinal key output 2: interaction summary\n")
@@ -1210,7 +1237,7 @@ print(interaction_summary, width = Inf)
 cat("\nFinal key output 3: Steatotic-only high-minus-low summary\n")
 print(steatotic_high_low_summary, width = Inf)
 
-cat("\nFinal key output 4: WDR6 correlation by condition and central group\n")
+cat("\nFinal key output 4: WDR6 correlation by condition and StrictCentral group\n")
 print(cor_by_condition_region, width = Inf)
 
 cat("\nFinal key output 5: WDR6 correlation rank\n")
