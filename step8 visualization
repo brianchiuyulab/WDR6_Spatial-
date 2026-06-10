@@ -1,5 +1,5 @@
 ############################################################
-## Checkpoint 8 FINAL
+## Checkpoint 8 FINAL with PLA2G4A
 ## Spatial visualization summary for StrictCentral analysis
 ##
 ## Dataset:
@@ -9,25 +9,29 @@
 ##   checkpoint7_StrictCentral_LipidRemodeling_Seurat_object_list.rds
 ##   checkpoint7_spot_level_StrictCentral_LipidRemodeling.csv
 ##   checkpoint7_StrictCentral_analysis_spots_only.csv
-##   checkpoint7_WDR6_correlation_by_condition_StrictCentral_group.csv
 ##
 ## Main outputs:
 ##   A_all_sections_HnE_StrictCentral_groups.pdf
 ##   B_rep_steatotic_HnE_Central_Portal_StrictGroups.pdf
 ##   C_rep_healthy_HnE_Central_Portal_StrictGroups.pdf
-##   D_WDR6_vs_LipidRemodelingModule_2x2_scatter.pdf
-##   E_rho_dotplot_FINAL.pdf
-##   checkpoint8_poster_summary_table.csv
+##   D_WDR6_vs_LipidRemodelingModule_with_PLA2G4A_2x2_scatter.pdf
+##   E_rho_dotplot_FINAL_with_PLA2G4A.pdf
+##   F_correlation_summary_scatter_plus_dotplot_with_PLA2G4A.pdf
+##   checkpoint8_poster_summary_table_with_PLA2G4A.csv
 ##
 ## Final plotting logic:
 ##   High central-like = red
 ##   Low central-like  = blue
 ##   Other             = grey
 ##
-## Lipid Remodeling Module:
-##   FASN, CYP2C8, EPHX2, CYP4A11, CYP4F2
+## Zonation scores:
+##   CentralScore = mean(GLUL, CYP2E1)
+##   PortalScore  = mean(HAL, SDS)
 ##
-## WDR6 is not included in the module.
+## Final Lipid Remodeling Module:
+##   FASN, CYP2C8, EPHX2, CYP4A11, CYP4F2, PLA2G4A
+##
+## WDR6 is analyzed separately and is not included in the module.
 ############################################################
 
 set.seed(20260608)
@@ -43,8 +47,8 @@ base_dir <- file.path(getwd(), project_name)
 dir_out <- file.path(base_dir, "checkpoint_outputs")
 dir_step7_tab <- file.path(dir_out, "checkpoint7_StrictCentral_LipidRemodeling_tables")
 
-dir_fig <- file.path(dir_out, "checkpoint8_FINAL_summary_figures")
-dir_tab <- file.path(dir_out, "checkpoint8_FINAL_summary_tables")
+dir_fig <- file.path(dir_out, "checkpoint8_FINAL_with_PLA2G4A_figures")
+dir_tab <- file.path(dir_out, "checkpoint8_FINAL_with_PLA2G4A_tables")
 
 if (dir.exists(dir_fig)) {
   unlink(dir_fig, recursive = TRUE, force = TRUE)
@@ -60,7 +64,13 @@ dir.create(dir_tab, showWarnings = FALSE, recursive = TRUE)
 ## 2. Load packages
 ############################################################
 
-required_pkgs <- c("Seurat", "ggplot2", "dplyr", "tidyr", "patchwork")
+required_pkgs <- c(
+  "Seurat",
+  "ggplot2",
+  "dplyr",
+  "tidyr",
+  "patchwork"
+)
 
 missing_pkgs <- required_pkgs[
   !vapply(required_pkgs, requireNamespace, logical(1), quietly = TRUE)
@@ -106,16 +116,10 @@ strict_analysis_path <- file.path(
   "checkpoint7_StrictCentral_analysis_spots_only.csv"
 )
 
-cor_path <- file.path(
-  dir_step7_tab,
-  "checkpoint7_WDR6_correlation_by_condition_StrictCentral_group.csv"
-)
-
 required_files <- c(
   obj_path,
   spot_path,
-  strict_analysis_path,
-  cor_path
+  strict_analysis_path
 )
 
 missing_files <- required_files[!file.exists(required_files)]
@@ -131,16 +135,182 @@ if (length(missing_files) > 0) {
 obj_list <- readRDS(obj_path)
 spot_df <- read.csv(spot_path, stringsAsFactors = FALSE)
 strict_analysis_df <- read.csv(strict_analysis_path, stringsAsFactors = FALSE)
-cor_group_df <- read.csv(cor_path, stringsAsFactors = FALSE)
 
 cat("\nLoaded Step 7 outputs.\n")
+cat("\nObjects:\n")
 print(names(obj_list))
 
 ############################################################
-## 5. Build plot metadata
+## 5. Define final module genes
 ############################################################
 
-selected_group_df <- strict_analysis_df %>%
+lipid_remodeling_genes_with_PLA2G4A <- c(
+  "FASN",
+  "CYP2C8",
+  "EPHX2",
+  "CYP4A11",
+  "CYP4F2",
+  "PLA2G4A"
+)
+
+############################################################
+## 6. Calculate PLA2G4A-included Lipid Remodeling Module score
+############################################################
+
+extract_module_score <- function(obj, gsm_name, gene_set, score_name) {
+  
+  DefaultAssay(obj) <- "Spatial"
+  
+  available_genes <- gene_set[gene_set %in% rownames(obj)]
+  missing_genes <- setdiff(gene_set, available_genes)
+  
+  if (length(missing_genes) > 0) {
+    warning(
+      gsm_name,
+      " missing genes: ",
+      paste(missing_genes, collapse = ", ")
+    )
+  }
+  
+  if (length(available_genes) == 0) {
+    stop("No module genes found in object: ", gsm_name)
+  }
+  
+  expr_mat <- FetchData(
+    object = obj,
+    vars = available_genes
+  )
+  
+  out <- data.frame(
+    barcode = rownames(expr_mat),
+    gsm = gsm_name,
+    stringsAsFactors = FALSE
+  )
+  
+  out[[score_name]] <- rowMeans(expr_mat, na.rm = TRUE)
+  out[[paste0(score_name, "_n_genes_used")]] <- length(available_genes)
+  out[[paste0(score_name, "_genes_used")]] <- paste(available_genes, collapse = ";")
+  
+  return(out)
+}
+
+module_score_list <- lapply(names(obj_list), function(gsm_i) {
+  
+  extract_module_score(
+    obj = obj_list[[gsm_i]],
+    gsm_name = gsm_i,
+    gene_set = lipid_remodeling_genes_with_PLA2G4A,
+    score_name = "LipidRemodelingModule_with_PLA2G4A"
+  )
+})
+
+module_score_df <- bind_rows(module_score_list)
+
+write.csv(
+  module_score_df,
+  file = file.path(
+    dir_tab,
+    "checkpoint8_module_score_with_PLA2G4A_by_spot.csv"
+  ),
+  row.names = FALSE
+)
+
+cat("\nModule score with PLA2G4A calculated.\n")
+
+############################################################
+## 7. Merge module score with StrictCentral analysis spots
+############################################################
+
+strict_analysis_with_PLA2G4A <- strict_analysis_df %>%
+  left_join(
+    module_score_df,
+    by = c("barcode", "gsm")
+  )
+
+if (any(is.na(strict_analysis_with_PLA2G4A$LipidRemodelingModule_with_PLA2G4A))) {
+  warning("Some StrictCentral spots have NA LipidRemodelingModule_with_PLA2G4A after merging.")
+}
+
+write.csv(
+  strict_analysis_with_PLA2G4A,
+  file = file.path(
+    dir_tab,
+    "checkpoint8_StrictCentral_spots_with_PLA2G4A_module.csv"
+  ),
+  row.names = FALSE
+)
+
+############################################################
+## 8. Recalculate WDR6 correlation using PLA2G4A-included module
+############################################################
+
+condition_levels <- c("Healthy", "Steatotic")
+strict_levels <- c("Low central-like", "High central-like")
+
+strict_analysis_with_PLA2G4A$condition <- factor(
+  strict_analysis_with_PLA2G4A$condition,
+  levels = condition_levels
+)
+
+strict_analysis_with_PLA2G4A$StrictCentralGroup <- factor(
+  strict_analysis_with_PLA2G4A$StrictCentralGroup,
+  levels = strict_levels
+)
+
+cor_group_df <- strict_analysis_with_PLA2G4A %>%
+  group_by(condition, StrictCentralGroup) %>%
+  summarise(
+    n_spots = n(),
+    
+    mean_WDR6_logNorm = mean(
+      WDR6_logNorm,
+      na.rm = TRUE
+    ),
+    
+    mean_LipidRemodelingModule_with_PLA2G4A = mean(
+      LipidRemodelingModule_with_PLA2G4A,
+      na.rm = TRUE
+    ),
+    
+    rho_WDR6_vs_LipidRemodelingModule_with_PLA2G4A = suppressWarnings(
+      cor(
+        WDR6_logNorm,
+        LipidRemodelingModule_with_PLA2G4A,
+        method = "spearman",
+        use = "complete.obs"
+      )
+    ),
+    
+    p_WDR6_vs_LipidRemodelingModule_with_PLA2G4A = suppressWarnings(
+      cor.test(
+        WDR6_logNorm,
+        LipidRemodelingModule_with_PLA2G4A,
+        method = "spearman",
+        exact = FALSE
+      )$p.value
+    ),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(condition, StrictCentralGroup)
+
+write.csv(
+  cor_group_df,
+  file = file.path(
+    dir_tab,
+    "checkpoint8_WDR6_correlation_with_PLA2G4A_module.csv"
+  ),
+  row.names = FALSE
+)
+
+cat("\nCorrelation summary using PLA2G4A-included module:\n")
+print(cor_group_df)
+
+############################################################
+## 9. Build plot metadata for tissue figures
+############################################################
+
+selected_group_df <- strict_analysis_with_PLA2G4A %>%
   select(
     barcode,
     gsm,
@@ -182,12 +352,15 @@ plot_meta$StrictCentralDisplay3 <- factor(
 
 write.csv(
   plot_meta,
-  file = file.path(dir_tab, "checkpoint8_plot_metadata.csv"),
+  file = file.path(
+    dir_tab,
+    "checkpoint8_plot_metadata_with_PLA2G4A.csv"
+  ),
   row.names = FALSE
 )
 
 ############################################################
-## 6. Add metadata back to Seurat objects by barcode matching
+## 10. Add tissue metadata back to Seurat objects
 ############################################################
 
 obj_list_vis <- obj_list
@@ -247,13 +420,23 @@ for (gsm in names(obj_list_vis)) {
 }
 
 ############################################################
-## 7. Colors and plotting helper
+## 11. Colors and plotting helpers
 ############################################################
 
 strict_cols_3 <- c(
   "High central-like" = "#D73027",
   "Low central-like" = "#4575B4",
   "Other" = "grey82"
+)
+
+rho_cols <- c(
+  "Low central-like" = "#00AFC1",
+  "High central-like" = "#F46D64"
+)
+
+rho_shapes <- c(
+  "Low central-like" = 16,
+  "High central-like" = 17
 )
 
 make_strict_group_overlay_plot <- function(obj, title_text, pt_size = 1.6, show_legend = TRUE) {
@@ -296,21 +479,22 @@ make_feature_plot <- function(obj, feature_name, title_text, pt_size = 1.6) {
 }
 
 ############################################################
-## 8. Figure A: all sections, StrictCentral groups
+## 12. Figure A: all sections, StrictCentral groups
 ############################################################
 
 section_order <- plot_meta %>%
   distinct(gsm, donor, condition, section) %>%
   arrange(condition, donor, section)
 
-all_section_plots <- lapply(section_order$gsm, function(gsm_i) {
+all_section_plots <- lapply(seq_len(nrow(section_order)), function(i) {
   
+  gsm_i <- section_order$gsm[i]
   obj_i <- obj_list_vis[[gsm_i]]
   
   title_i <- paste0(
-    unique(obj_i$condition), " | ",
-    unique(obj_i$donor), " | ",
-    unique(obj_i$section)
+    section_order$condition[i], " | ",
+    section_order$donor[i], " | ",
+    section_order$section[i]
   )
   
   make_strict_group_overlay_plot(
@@ -332,15 +516,17 @@ p_all_sections <- wrap_plots(all_section_plots, nrow = 1) +
   )
 
 ggsave(
-  filename = file.path(dir_fig, "A_all_sections_HnE_StrictCentral_groups.pdf"),
+  filename = file.path(
+    dir_fig,
+    "A_all_sections_HnE_StrictCentral_groups.pdf"
+  ),
   plot = p_all_sections,
   width = 18,
   height = 4.2
 )
 
 ############################################################
-## 9. Figure B: representative steatotic section
-## CentralScore + PortalScore + StrictCentral groups
+## 13. Figure B: representative steatotic section
 ############################################################
 
 if (!(focus_gsm_steatotic %in% names(obj_list_vis))) {
@@ -349,6 +535,11 @@ if (!(focus_gsm_steatotic %in% names(obj_list_vis))) {
 
 obj_st <- obj_list_vis[[focus_gsm_steatotic]]
 DefaultAssay(obj_st) <- "Spatial"
+
+st_info <- plot_meta %>%
+  filter(gsm == focus_gsm_steatotic) %>%
+  distinct(donor, section, condition) %>%
+  slice(1)
 
 p_st_central <- make_feature_plot(
   obj = obj_st,
@@ -376,7 +567,7 @@ p_rep_steatotic <- (p_st_central | p_st_portal | p_st_groups) +
   plot_annotation(
     title = "Representative steatotic section",
     subtitle = paste0(
-      unique(obj_st$donor), " / ", unique(obj_st$section),
+      st_info$donor, " / ", st_info$section,
       "; red = high central-like, blue = low central-like, grey = other"
     ),
     theme = theme(
@@ -386,15 +577,17 @@ p_rep_steatotic <- (p_st_central | p_st_portal | p_st_groups) +
   )
 
 ggsave(
-  filename = file.path(dir_fig, "B_rep_steatotic_HnE_Central_Portal_StrictGroups.pdf"),
+  filename = file.path(
+    dir_fig,
+    "B_rep_steatotic_HnE_Central_Portal_StrictGroups.pdf"
+  ),
   plot = p_rep_steatotic,
   width = 13,
   height = 4.8
 )
 
 ############################################################
-## 10. Figure C: representative healthy section
-## CentralScore + PortalScore + StrictCentral groups
+## 14. Figure C: representative healthy section
 ############################################################
 
 if (!(focus_gsm_healthy %in% names(obj_list_vis))) {
@@ -403,6 +596,11 @@ if (!(focus_gsm_healthy %in% names(obj_list_vis))) {
 
 obj_hl <- obj_list_vis[[focus_gsm_healthy]]
 DefaultAssay(obj_hl) <- "Spatial"
+
+hl_info <- plot_meta %>%
+  filter(gsm == focus_gsm_healthy) %>%
+  distinct(donor, section, condition) %>%
+  slice(1)
 
 p_hl_central <- make_feature_plot(
   obj = obj_hl,
@@ -430,7 +628,7 @@ p_rep_healthy <- (p_hl_central | p_hl_portal | p_hl_groups) +
   plot_annotation(
     title = "Representative healthy section",
     subtitle = paste0(
-      unique(obj_hl$donor), " / ", unique(obj_hl$section),
+      hl_info$donor, " / ", hl_info$section,
       "; red = high central-like, blue = low central-like, grey = other"
     ),
     theme = theme(
@@ -440,41 +638,24 @@ p_rep_healthy <- (p_hl_central | p_hl_portal | p_hl_groups) +
   )
 
 ggsave(
-  filename = file.path(dir_fig, "C_rep_healthy_HnE_Central_Portal_StrictGroups.pdf"),
+  filename = file.path(
+    dir_fig,
+    "C_rep_healthy_HnE_Central_Portal_StrictGroups.pdf"
+  ),
   plot = p_rep_healthy,
   width = 13,
   height = 4.8
 )
 
 ############################################################
-## 11. Figure D: WDR6 vs Lipid Remodeling Module 2x2 scatter
+## 15. Figure D: WDR6 vs PLA2G4A-included module scatter
 ############################################################
 
-strict_analysis_df$condition <- factor(
-  strict_analysis_df$condition,
-  levels = c("Healthy", "Steatotic")
-)
-
-strict_analysis_df$StrictCentralGroup <- factor(
-  strict_analysis_df$StrictCentralGroup,
-  levels = c("Low central-like", "High central-like")
-)
-
-cor_group_df$condition <- factor(
-  cor_group_df$condition,
-  levels = c("Healthy", "Steatotic")
-)
-
-cor_group_df$StrictCentralGroup <- factor(
-  cor_group_df$StrictCentralGroup,
-  levels = c("Low central-like", "High central-like")
-)
-
-scatter_anno <- strict_analysis_df %>%
+scatter_anno <- strict_analysis_with_PLA2G4A %>%
   group_by(condition, StrictCentralGroup) %>%
   summarise(
     x = quantile(WDR6_logNorm, probs = 0.07, na.rm = TRUE),
-    y = quantile(LipidRemodelingModule_logMean, probs = 0.95, na.rm = TRUE),
+    y = quantile(LipidRemodelingModule_with_PLA2G4A, probs = 0.95, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   left_join(
@@ -482,26 +663,32 @@ scatter_anno <- strict_analysis_df %>%
       select(
         condition,
         StrictCentralGroup,
-        rho_WDR6_vs_LipidRemodelingModule
+        rho_WDR6_vs_LipidRemodelingModule_with_PLA2G4A
       ),
     by = c("condition", "StrictCentralGroup")
   ) %>%
   mutate(
     label = paste0(
       "rho = ",
-      sprintf("%.3f", rho_WDR6_vs_LipidRemodelingModule)
+      sprintf("%.3f", rho_WDR6_vs_LipidRemodelingModule_with_PLA2G4A)
     )
   )
 
 write.csv(
   scatter_anno,
-  file = file.path(dir_tab, "checkpoint8_scatter_annotation.csv"),
+  file = file.path(
+    dir_tab,
+    "checkpoint8_scatter_annotation_with_PLA2G4A.csv"
+  ),
   row.names = FALSE
 )
 
 p_scatter <- ggplot(
-  strict_analysis_df,
-  aes(x = WDR6_logNorm, y = LipidRemodelingModule_logMean)
+  strict_analysis_with_PLA2G4A,
+  aes(
+    x = WDR6_logNorm,
+    y = LipidRemodelingModule_with_PLA2G4A
+  )
 ) +
   geom_point(alpha = 0.35, size = 0.65) +
   geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
@@ -516,97 +703,201 @@ p_scatter <- ggplot(
   ) +
   theme_classic(base_size = 12) +
   labs(
-    title = "WDR6 association with the Lipid Remodeling Module",
-    subtitle = "Association is strongest in steatotic high central-like spots",
+    title = "Association of WDR6 with the Lipid Remodeling Module",
+    subtitle = "Module includes FASN, CYP2C8, EPHX2, CYP4A11, CYP4F2, and PLA2G4A",
     x = "WDR6 expression",
     y = "Lipid Remodeling Module score"
   )
 
 ggsave(
-  filename = file.path(dir_fig, "D_WDR6_vs_LipidRemodelingModule_2x2_scatter.pdf"),
+  filename = file.path(
+    dir_fig,
+    "D_WDR6_vs_LipidRemodelingModule_with_PLA2G4A_2x2_scatter.pdf"
+  ),
   plot = p_scatter,
   width = 9,
   height = 7
 )
 
 ############################################################
-## 12. Figure E: final rho dot plot with numeric labels
+## 16. Figure E: final rho dot plot
 ############################################################
 
+rho_plot_df <- cor_group_df %>%
+  mutate(
+    condition = factor(condition, levels = condition_levels),
+    StrictCentralGroup = factor(StrictCentralGroup, levels = strict_levels),
+    rho_label = sprintf("%.3f", rho_WDR6_vs_LipidRemodelingModule_with_PLA2G4A),
+    label_y = rho_WDR6_vs_LipidRemodelingModule_with_PLA2G4A + 0.018
+  )
+
+write.csv(
+  rho_plot_df,
+  file = file.path(
+    dir_tab,
+    "checkpoint8_rho_dotplot_table_with_PLA2G4A.csv"
+  ),
+  row.names = FALSE
+)
+
 p_rho_dot <- ggplot(
-  cor_group_df,
+  rho_plot_df,
   aes(
     x = condition,
-    y = rho_WDR6_vs_LipidRemodelingModule,
+    y = rho_WDR6_vs_LipidRemodelingModule_with_PLA2G4A,
+    color = StrictCentralGroup,
     shape = StrictCentralGroup
   )
 ) +
-  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.4) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.45,
+    color = "grey30"
+  ) +
   geom_point(
-    size = 4,
+    size = 4.8,
+    alpha = 0.95,
     position = position_dodge(width = 0.45)
   ) +
   geom_text(
-    aes(label = sprintf("%.3f", rho_WDR6_vs_LipidRemodelingModule)),
+    aes(
+      y = label_y,
+      label = rho_label
+    ),
     position = position_dodge(width = 0.45),
-    vjust = -0.9,
-    size = 3.6
+    size = 4.4,
+    show.legend = FALSE
   ) +
-  theme_classic(base_size = 12) +
+  scale_color_manual(
+    values = rho_cols,
+    name = "StrictCentral group"
+  ) +
+  scale_shape_manual(
+    values = rho_shapes,
+    name = "StrictCentral group"
+  ) +
+  scale_y_continuous(
+    limits = c(-0.05, 0.50),
+    breaks = c(-0.05, 0, 0.1, 0.2, 0.3, 0.4, 0.5),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(
+      size = 18,
+      face = "bold",
+      hjust = 0.5
+    ),
+    axis.title.y = element_text(
+      size = 15,
+      face = "bold"
+    ),
+    axis.text.x = element_text(
+      size = 14,
+      color = "black"
+    ),
+    axis.text.y = element_text(
+      size = 12,
+      color = "black"
+    ),
+    axis.line = element_line(
+      linewidth = 0.7,
+      color = "black"
+    ),
+    axis.ticks = element_line(
+      linewidth = 0.6,
+      color = "black"
+    ),
+    legend.title = element_text(
+      size = 14,
+      face = "plain"
+    ),
+    legend.text = element_text(
+      size = 13
+    ),
+    legend.position = "right",
+    plot.margin = margin(
+      t = 12,
+      r = 20,
+      b = 10,
+      l = 10
+    )
+  ) +
   labs(
-    title = "Disease- and region-specific WDR6-module association",
+    title = "Association of WDR6 with the Lipid Remodeling Module",
     x = NULL,
-    y = "Spearman rho",
-    shape = "StrictCentral group"
+    y = "Spearman rho"
   )
 
 ggsave(
-  filename = file.path(dir_fig, "E_rho_dotplot_FINAL.pdf"),
+  filename = file.path(
+    dir_fig,
+    "E_rho_dotplot_FINAL_with_PLA2G4A.pdf"
+  ),
   plot = p_rho_dot,
-  width = 6,
-  height = 4.5
+  width = 7.2,
+  height = 5.2
+)
+
+ggsave(
+  filename = file.path(
+    dir_fig,
+    "E_rho_dotplot_FINAL_with_PLA2G4A.png"
+  ),
+  plot = p_rho_dot,
+  width = 7.2,
+  height = 5.2,
+  dpi = 600
 )
 
 ############################################################
-## 13. Combined correlation summary
+## 17. Combined correlation summary
 ############################################################
 
 p_corr_summary <- p_scatter / p_rho_dot +
   plot_layout(heights = c(2.1, 1))
 
 ggsave(
-  filename = file.path(dir_fig, "F_correlation_summary_scatter_plus_dotplot.pdf"),
+  filename = file.path(
+    dir_fig,
+    "F_correlation_summary_scatter_plus_dotplot_with_PLA2G4A.pdf"
+  ),
   plot = p_corr_summary,
   width = 9,
   height = 10
 )
 
 ############################################################
-## 14. Poster summary table
+## 18. Poster summary table
 ############################################################
 
 poster_summary <- cor_group_df %>%
   select(
     condition,
     StrictCentralGroup,
+    n_spots,
     mean_WDR6_logNorm,
-    mean_LipidRemodelingModule_logMean,
-    rho_WDR6_vs_LipidRemodelingModule,
-    rho_WDR6_vs_FASN
+    mean_LipidRemodelingModule_with_PLA2G4A,
+    rho_WDR6_vs_LipidRemodelingModule_with_PLA2G4A,
+    p_WDR6_vs_LipidRemodelingModule_with_PLA2G4A
   ) %>%
   arrange(condition, StrictCentralGroup)
 
 write.csv(
   poster_summary,
-  file = file.path(dir_tab, "checkpoint8_poster_summary_table.csv"),
+  file = file.path(
+    dir_tab,
+    "checkpoint8_poster_summary_table_with_PLA2G4A.csv"
+  ),
   row.names = FALSE
 )
 
-cat("\nPoster summary table:\n")
+cat("\nPoster summary table with PLA2G4A:\n")
 print(poster_summary)
 
 ############################################################
-## 15. Spot count table
+## 19. Spot count table
 ############################################################
 
 spot_count_summary <- plot_meta %>%
@@ -623,7 +914,10 @@ spot_count_summary <- plot_meta %>%
 
 write.csv(
   spot_count_summary,
-  file = file.path(dir_tab, "checkpoint8_StrictCentral_spot_count_summary.csv"),
+  file = file.path(
+    dir_tab,
+    "checkpoint8_StrictCentral_spot_count_summary.csv"
+  ),
   row.names = FALSE
 )
 
@@ -631,25 +925,29 @@ cat("\nStrictCentral spot count summary:\n")
 print(spot_count_summary)
 
 ############################################################
-## 16. Save session info
+## 20. Save session info
 ############################################################
 
 writeLines(
   capture.output(sessionInfo()),
-  con = file.path(dir_out, "checkpoint8_sessionInfo.txt")
+  con = file.path(
+    dir_out,
+    "checkpoint8_FINAL_with_PLA2G4A_sessionInfo.txt"
+  )
 )
 
 ############################################################
-## 17. Final file check
+## 21. Final file check
 ############################################################
 
 expected_figures <- c(
   file.path(dir_fig, "A_all_sections_HnE_StrictCentral_groups.pdf"),
   file.path(dir_fig, "B_rep_steatotic_HnE_Central_Portal_StrictGroups.pdf"),
   file.path(dir_fig, "C_rep_healthy_HnE_Central_Portal_StrictGroups.pdf"),
-  file.path(dir_fig, "D_WDR6_vs_LipidRemodelingModule_2x2_scatter.pdf"),
-  file.path(dir_fig, "E_rho_dotplot_FINAL.pdf"),
-  file.path(dir_fig, "F_correlation_summary_scatter_plus_dotplot.pdf")
+  file.path(dir_fig, "D_WDR6_vs_LipidRemodelingModule_with_PLA2G4A_2x2_scatter.pdf"),
+  file.path(dir_fig, "E_rho_dotplot_FINAL_with_PLA2G4A.pdf"),
+  file.path(dir_fig, "E_rho_dotplot_FINAL_with_PLA2G4A.png"),
+  file.path(dir_fig, "F_correlation_summary_scatter_plus_dotplot_with_PLA2G4A.pdf")
 )
 
 file_check <- data.frame(
@@ -660,11 +958,14 @@ file_check <- data.frame(
 
 write.csv(
   file_check,
-  file = file.path(dir_tab, "checkpoint8_file_check.csv"),
+  file = file.path(
+    dir_tab,
+    "checkpoint8_file_check_with_PLA2G4A.csv"
+  ),
   row.names = FALSE
 )
 
-cat("\nCheckpoint 8 completed.\n")
+cat("\nCheckpoint 8 FINAL with PLA2G4A completed.\n")
 
 cat("\nSaved figures in:\n")
 cat(dir_fig, "\n")
